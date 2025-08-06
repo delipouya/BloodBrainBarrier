@@ -93,8 +93,9 @@ for column_name in sample_metadata.columns:
     plt.tight_layout()
     plt.show()
 
+
 #### save subset data
-adata_sub.write("Data/human_prefrontal_cortex_HBCC_Cohort_BBB_cell_types.h5ad")
+#adata_sub.write("Data/human_prefrontal_cortex_HBCC_Cohort_BBB_cell_types.h5ad")
 ####################################################
 column_name = 'Schizophrenia'
 print(adata_sub.obs[column_name].value_counts())
