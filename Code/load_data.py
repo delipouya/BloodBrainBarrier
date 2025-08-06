@@ -75,6 +75,7 @@ for column_name in columns_to_check:
         plt.yticks(fontsize=26)
         plt.tight_layout()
         plt.show()
+        
 unique_donors = adata_sub.obs['donor_id'].nunique()
 print(f"Unique donor IDs: {unique_donors}")
 
