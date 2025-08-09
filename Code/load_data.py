@@ -3,7 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import scanpy as sc
 
-adata = ad.read_h5ad("Data/human_prefrontal_cortex_HBCC_Cohort.h5ad")
+adata = ad.read_h5ad("/home/delaram/BloodBrainBarrier/Data/human_prefrontal_cortex_HBCC_Cohort.h5ad")
 print(adata.shape)
 metadata = pd.DataFrame(adata.obs)
 metadata.head()
@@ -11,12 +11,16 @@ metadata.head()
 ### save/read metadata
 #metadata.to_csv("Data/human_prefrontal_cortex_HBCC_Cohort_metadata.csv", index=False)
 # Load metadata from CSV
-metadata = pd.read_csv("../Data/human_prefrontal_cortex_HBCC_Cohort_metadata.csv")
-metadata = pd.read_csv("../Data/human_prefrontal_cortex_HBCC_Cohort_Schizophrenia_metadata.csv")
-metadata_immune_cells = metadata[metadata['cell_type'].isin(['B cell', 'plasma cell', 'T cell', 'natural killer cell'])]
+#metadata = pd.read_csv("../Data/human_prefrontal_cortex_HBCC_Cohort_metadata.csv")
+#metadata = pd.read_csv("../Data/human_prefrontal_cortex_HBCC_Cohort_Schizophrenia_metadata.csv")
+metadata_immune_cells = metadata[metadata['cell_type'].isin(['B cell', 
+                                                             'plasma cell', 
+                                                             'T cell',
+                                                              'natural killer cell'])]
 print(sum(metadata_immune_cells.disease=='normal'))
 ### exclude disease=='normal
 metadata_immune_cells = metadata_immune_cells[metadata_immune_cells['disease'] != 'normal']
+
 plt.figure(figsize=(13, 10)) # (25, 18) (25, 15) for larger plots
 metadata_immune_cells['disease'].value_counts().plot(kind='bar')
 plt.title(f"Counts for immune cell types", fontsize=26)
@@ -30,7 +34,7 @@ plt.show()
 #print(metadata[column_name].value_counts())
 #adata = adata[adata.obs[column_name] == 'Yes']
 #adata_subset.write("Data/human_prefrontal_cortex_HBCC_Cohort_Schizophrenia.h5ad")
-adata = ad.read_h5ad("Data/human_prefrontal_cortex_HBCC_Cohort_Schizophrenia.h5ad")
+#adata = ad.read_h5ad("Data/human_prefrontal_cortex_HBCC_Cohort_Schizophrenia.h5ad")
 
 #'tissue_type'=tissue! al
 columns_to_check = ['class', 'subclass',  'suspension_type',
@@ -49,6 +53,7 @@ for column_name in columns_to_check:
         plt.yticks(fontsize=26)
         plt.tight_layout()
         plt.show()
+
 ## count unique 'donor_id'
 unique_donors = adata.obs['donor_id'].nunique()
 print(f"Unique donor IDs: {unique_donors}")
@@ -70,55 +75,125 @@ for column_name in sample_metadata.columns:
 
 ##########################################################
 BBB_cell_types = ['astrocyte', 'endothelial cell', 'pericyte']
+BBB_cell_types = ['astrocyte', 'endothelial cell', 'pericyte', 
+                  'microglial cell', 
+                  'vascular leptomeningeal cell', 
+                  'perivascular macrophage', 
+                  'smooth muscle cell']
 ## subset to only BBB cell types
-adata_sub = adata[adata.obs['cell_type'].isin(BBB_cell_types)]
+adata_BBB = adata[adata.obs['cell_type'].isin(BBB_cell_types)]
 print(adata.shape)
-print(adata_sub.shape)
+print(adata_BBB.shape)
 
-columns_to_check = ['class', 'subclass',  'suspension_type',
-    'genetic_ancestry', 'assay', 'sex', 'tissue']
-columns_to_check = ['disease', 'cell_type']
+columns_to_check = ['class', 'subclass', 'genetic_ancestry', 'sex']
 
 # Make a bar plot for each column
 for column_name in columns_to_check:
-    if column_name in adata_sub.obs.columns:
+    if column_name in adata_BBB.obs.columns:
         plt.figure(figsize=(12, 10)) # (25, 18) for larger plots
-        adata_sub.obs[column_name].value_counts().plot(kind='bar')
-        plt.title(f"Counts for {column_name}")
+        adata_BBB.obs[column_name].value_counts().plot(kind='bar')
+        #plt.title(f"Counts for {column_name}")
         plt.xlabel(column_name, fontsize=26)
-        plt.ylabel("Count", fontsize=26)
-        plt.xticks(rotation=45, ha='right', fontsize=28)
-        plt.yticks(fontsize=26)
+        #plt.ylabel("Count", fontsize=26)
+        plt.xticks(rotation=45, ha='right', fontsize=30)
+        plt.yticks(fontsize=28)
         plt.tight_layout()
         plt.show()
-        
-unique_donors = adata_sub.obs['donor_id'].nunique()
+
+adata_BBB.obs['status'] = adata_BBB.obs['disease'].apply(lambda x: 'disease' if x != 'normal' else 'control')
+column_name = 'Schizophrenia'
+print(adata_BBB.obs[column_name].value_counts())
+condition = (adata_BBB.obs[column_name] == 'Yes') | (adata_BBB.obs['disease'] == 'normal')
+adata_BBB_SZ_CR = adata_BBB[condition]
+print(adata_BBB_SZ_CR.obs['disease'].value_counts())
+### save AnnData file using ad
+adata_BBB_SZ_CR.write("/home/delaram/BloodBrainBarrier/human_prefrontal_cortex_HBCC_Cohort_BBB_cell_types_Schizophrenia_extended.h5ad")
+
+####### disease distribution #######
+### exclude normal ones
+adata_temp = adata_BBB_SZ_CR[adata_BBB_SZ_CR.obs['disease'] != 'normal']
+plt.figure(figsize=(22, 15)) # (25, 18) for larger plots
+adata_temp.obs['disease'].value_counts().plot(kind='bar')
+#plt.title(f"Counts for {column_name}")
+plt.xlabel('disease', fontsize=26)
+#plt.ylabel("Count", fontsize=26)
+plt.xticks(rotation=45, ha='right', fontsize=30)
+plt.yticks(fontsize=28)
+plt.tight_layout()
+plt.show()
+
+###################################
+df = pd.DataFrame(adata_BBB_SZ_CR.obs)
+# Count cells per cell_type per status
+counts = df.groupby(["cell_type", "status"]).size().unstack(fill_value=0)
+# Plot as grouped bars (side-by-side)
+counts.plot(kind="bar", stacked=False)
+plt.ylabel("Number of cells")
+plt.xlabel("Cell type")
+plt.xticks(rotation=45, ha='right')
+plt.legend(title="Status")
+plt.tight_layout()
+plt.show()
+
+unique_donors = adata_BBB_SZ_CR.obs['donor_id'].nunique()
 print(f"Unique donor IDs: {unique_donors}")
 
 ### make sample-level metadata for donor_id and sex, genetic_ancestry, disease and then make bar plots for each
-sample_metadata = adata_sub.obs[['donor_id', 'sex', 'genetic_ancestry', 'disease']]
+sample_metadata = adata_BBB_SZ_CR.obs[['donor_id', 'sex', 'genetic_ancestry', 'disease', 'status']]
 sample_metadata = sample_metadata.drop_duplicates()
 
-for column_name in sample_metadata.columns:
-    plt.figure(figsize=(25, 18)) #(10, 6)
-    sample_metadata[column_name].value_counts().plot(kind='bar')
-    plt.title(f"Counts for {column_name}")
-    plt.xlabel(column_name, fontsize=26)
-    plt.ylabel("Count", fontsize=26)
-    plt.xticks(rotation=45, ha='right', fontsize=26)
-    plt.yticks(fontsize=26)
-    plt.tight_layout()
-    plt.show()
 
+df = pd.DataFrame(sample_metadata)
+counts = df.groupby(["sex", "status"]).size().unstack(fill_value=0)
+
+plt.figure(figsize=(3, 4)) #(10, 6)
+counts.plot(kind="bar", stacked=False)
+plt.title('')
+plt.xticks(rotation=45, ha='right', fontsize=15)
+plt.yticks(fontsize=15)
+plt.legend(title="Status")
+plt.tight_layout()
+plt.show()
+
+counts = df.groupby(["genetic_ancestry", "status"]).size().unstack(fill_value=0)
+plt.figure(figsize=(12, 6)) #(10, 6)
+counts.plot(kind="bar", stacked=False)
+plt.title('')
+plt.xticks(rotation=45, ha='right', fontsize=15)
+plt.yticks(fontsize=15)
+plt.legend(title="Status")
+plt.tight_layout()
+plt.show()
+
+column_name = 'status'
+plt.figure(figsize=(9, 9)) #(10, 6)
+sample_metadata[column_name].value_counts().plot(kind='bar')
+plt.title(f"Counts for {column_name}")
+plt.xlabel(column_name, fontsize=26)
+plt.ylabel("Count", fontsize=26)
+plt.xticks(rotation=45, ha='right', fontsize=26)
+plt.yticks(fontsize=26)
+plt.tight_layout()
+plt.show()
+
+sample_metadata_tmp = sample_metadata[sample_metadata['disease'] != 'normal']
+## remove normal from xtciks
+temp = sample_metadata_tmp[column_name].value_counts()
+### remove normal
+temp = temp[temp.index != 'normal']
+plt.figure(figsize=(12, 6)) #(10, 6)
+temp.plot(kind='bar')
+plt.xlabel(column_name, fontsize=26)
+plt.ylabel("Count", fontsize=26)
+plt.xticks(rotation=45, ha='right', fontsize=26)
+plt.yticks(fontsize=26)
+plt.tight_layout()
+plt.show()
 
 #### save subset data
 #adata_sub.write("Data/human_prefrontal_cortex_HBCC_Cohort_BBB_cell_types.h5ad")
 ####################################################
-column_name = 'Schizophrenia'
-print(adata_sub.obs[column_name].value_counts())
-condition = (adata_sub.obs[column_name] == 'Yes') | (adata_sub.obs['disease'] == 'normal')
-adata_sub2 = adata_sub[condition]
-print(adata_sub2.obs['disease'].value_counts())
+
 ####
 columns_to_check = ['class', 'subclass',  'suspension_type',
     'genetic_ancestry', 'assay', 'sex', 'tissue']
