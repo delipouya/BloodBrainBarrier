@@ -8,13 +8,29 @@ print(adata.shape)
 metadata = pd.DataFrame(adata.obs)
 metadata.head()
 
-### save metadata
-#metadata.to_csv("Data/human_prefrontal_cortex_HBCC_Cohort_metadata.csv")
-#column_name = 'Schizophrenia'
+### save/read metadata
+#metadata.to_csv("Data/human_prefrontal_cortex_HBCC_Cohort_metadata.csv", index=False)
+# Load metadata from CSV
+metadata = pd.read_csv("../Data/human_prefrontal_cortex_HBCC_Cohort_metadata.csv")
+metadata = pd.read_csv("../Data/human_prefrontal_cortex_HBCC_Cohort_Schizophrenia_metadata.csv")
+metadata_immune_cells = metadata[metadata['cell_type'].isin(['B cell', 'plasma cell', 'T cell', 'natural killer cell'])]
+print(sum(metadata_immune_cells.disease=='normal'))
+### exclude disease=='normal
+metadata_immune_cells = metadata_immune_cells[metadata_immune_cells['disease'] != 'normal']
+plt.figure(figsize=(13, 10)) # (25, 18) (25, 15) for larger plots
+metadata_immune_cells['disease'].value_counts().plot(kind='bar')
+plt.title(f"Counts for immune cell types", fontsize=26)
+plt.xlabel('disease by immune cell', fontsize=26)
+plt.ylabel("Count", fontsize=26)
+plt.xticks(rotation=45, ha='right', fontsize=26)
+plt.yticks(fontsize=26)
+plt.tight_layout()
+plt.show()
+
 #print(metadata[column_name].value_counts())
 #adata = adata[adata.obs[column_name] == 'Yes']
 #adata_subset.write("Data/human_prefrontal_cortex_HBCC_Cohort_Schizophrenia.h5ad")
-#adata = ad.read_h5ad("Data/human_prefrontal_cortex_HBCC_Cohort_Schizophrenia.h5ad")
+adata = ad.read_h5ad("Data/human_prefrontal_cortex_HBCC_Cohort_Schizophrenia.h5ad")
 
 #'tissue_type'=tissue! al
 columns_to_check = ['class', 'subclass',  'suspension_type',
@@ -176,3 +192,25 @@ for column_name in columns_to_check:
         sc.pl.umap(adata, color=[column_name], 
         frameon=False, size=20, title=f'{column_name} UMAP', wspace=0.4, hspace=0.4)
 print(adata.shape)
+
+
+adata = ad.read_h5ad("../Data/human_prefrontal_cortex_HBCC_Cohort_Schizophrenia_preprocessed.h5ad")
+adata.obs['immune_cell'] = adata.obs['cell_type']
+### if the cell_type is in not the list of immune cells, ste it to 'other'
+immune_cell_types = ['B cell', 'plasma cell', 'T cell', 'natural killer cell']
+adata.obs['immune_cell'] = adata.obs['cell_type'].apply(lambda x: x if x in immune_cell_types else 'other')
+custom_palette = {
+    'B cell': '#1f77b4',
+    'plasma cell': '#ff7f0e',
+    'T cell': '#2ca02c',
+    'natural killer cell': '#d62728',
+    'astrocyte': '#9467bd',
+    'endothelial cell': '#8c564b',
+    'pericyte': '#e377c2',
+    #'other': '#7f7f7f'  # Grey for other cell types
+    'other': '#D3D3D3'
+}
+sc.pl.umap(adata, color=['immune_cell'], frameon=False, 
+           size=20, title='Immune cells Schizophrenia UMAP',
+             palette=custom_palette, 
+           wspace=0.4, hspace=0.4, alpha=0.5)
