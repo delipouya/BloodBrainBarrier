@@ -6,50 +6,56 @@ import found
 from found.adapters import Pipeline
 from found.tune import NaiveMinScoreTuner, score_phatdiff, score_deg
 from found import methods as m
-RANDOM_STATE = 42
-adata = ad.read_h5ad("Data/human_prefrontal_cortex_HBCC_Cohort_BBB_cell_types_Schizophrenia_CaseControl_preprocessed.h5ad")
-
-# next, we run the standard HiDDEN pipeline to classify affected cells on:
-# normal bone marrow, smoldering multiple myeloma, and multiple myeloma patients
-
-
-found.set_seed(RANDOM_STATE)  # set a fixed seed for replicability
-algo = Pipeline.from_proc_ad("X_pca", m.log_reg, m.kmeans_bin)
-p_hat, labs = found.find(adata, "Schizophrenia", "No", algo, k=30, 
-                         adata=adata, regopt_maxiter=300, regopt_solver="newton-cg")
-
-p_hat, labs = found.findt(adata, "Schizophrenia", "No", algo, 
-                          tuner = NaiveMinScoreTuner(score_phatdiff, range(10, 30)), 
-                          adata=adata, regopt_maxiter=300, regopt_solver="newton-cg")
-
-
-
-import anndata as ad
-import pandas as pd
-import matplotlib.pyplot as plt
-import scanpy as sc
-import found
 import seaborn as sns
-from found.adapters import Pipeline
 import numpy as np
-from found import methods as m
 from matplotlib_venn import venn2
 
 RANDOM_STATE = 42
-
-#### import processed data
-adata = ad.read_h5ad("Data/human_prefrontal_cortex_HBCC_Cohort_BBB_cell_types_Schizophrenia_CaseControl_preprocessed.h5ad")
-
 found.set_seed(RANDOM_STATE)  # set a fixed seed for replicability
-algo = Pipeline.from_proc_ad("X_pca", m.log_reg, m.kmeans_bin)
-### control="No"
-p_hat, labs = found.find(adata, cond_col="Schizophrenia", control_val="No",
-                         algo=algo, k=30,  adata=adata, regopt_maxiter=300,
-                           regopt_solver="newton-cg")
 
-adata.obs['phat'] = p_hat
-adata.obs['labs'] = labs
+#adata = ad.read_h5ad("Data/human_prefrontal_cortex_HBCC_Cohort_BBB_cell_types_Schizophrenia_CaseControl_preprocessed.h5ad")
+adata = ad.read_h5ad("/home/delaram/BloodBrainBarrier/Data/human_prefrontal_cortex_HBCC_Cohort_BBB_cell_types_Schizophrenia_extended.h5ad")
+###
+
+# #algo = Pipeline.from_proc_ad("X_pca", m.log_reg, m.kmeans_bin) 
+algo = Pipeline(m.run_lognorm_pca, m.log_reg, m.kmeans_bin, True)
+
+#algo = Pipeline.from_proc_ad("X_pca", m.log_reg, m.kmeans_bin) ## run this if already processed
+#p_hat, labs = found.find(adata, cond_col="Schizophrenia", control_val="No",
+#                         algo=algo, k=30,  adata=adata, regopt_maxiter=300,
+#                           regopt_solver="newton-cg")
+
+optimal_k, res_dict = found.findt(
+    adata,
+    cond_col="Schizophrenia",
+    control_val="No",
+    tuner=NaiveMinScoreTuner(score_phatdiff, range(5, 31)),
+    X=adata.X,  
+    adata=adata,
+    regopt_maxiter=300,
+    regopt_solver="newton-cg"
+)
+test_k = 29
+res_dict[test_k]
+adata.obs['phat'] = res_dict[test_k][0]  # p_hat
+adata.obs['labs'] = res_dict[test_k][1]  # labs
 df = pd.DataFrame(adata.obs)
+
+### TODO: eval the output data structure
+#df = pd.DataFrame(adata_sub_dict['astrocyte'].obs)
+data_for_plot = [df['phat'][df['Schizophrenia'] == cat] for cat in df['Schizophrenia'].unique()]
+categories = df['Schizophrenia'].unique()
+fig, ax = plt.subplots(figsize=(8, 6))
+ax.violinplot(data_for_plot, showmeans=True, showmedians=True)
+ax.set_xticks(np.arange(1, len(categories) + 1))
+ax.set_xticklabels(categories)
+ax.set_title('Violin Plot of p-hat by Schizophrenia=Yes/No')
+ax.set_xlabel('Schizophrenia Status')
+ax.set_ylabel('p-hat')
+ax.grid(True, linestyle='--', alpha=0.7)
+plt.show()
+
+
 
 print(adata.obs.cell_type.value_counts())
 
@@ -59,10 +65,10 @@ for cell_type in adata.obs.cell_type.unique():
    
     #### subsetting data to include endothelial cells only
     adata_cell_type = adata[adata.obs.cell_type==cell_type,]
-    p_hat, labs = found.find(adata_cell_type, cond_col="Schizophrenia", 
-                             control_val="No", algo=algo, k=30,  
-                             adata=adata_cell_type, regopt_maxiter=300, 
-                             regopt_solver="newton-cg")
+    #p_hat, labs = found.find(adata_cell_type, cond_col="Schizophrenia", 
+    #                         control_val="No", algo=algo, k=30,  
+    #                         adata=adata_cell_type, regopt_maxiter=300, 
+    #                         regopt_solver="newton-cg")
 
     adata_cell_type.obs['phat'] = p_hat
     adata_cell_type.obs['labs'] = labs
@@ -104,6 +110,7 @@ for cell_type in adata.obs.cell_type.unique():
 keys = ['astrocyte', 'endothelial cell', 'pericyte']
 i = 0
 df = adata_sub_dict[keys[i]].obs
+
 #df = pd.DataFrame(adata_sub_dict['astrocyte'].obs)
 data_for_plot = [df['phat'][df['Schizophrenia'] == cat] for cat in df['Schizophrenia'].unique()]
 categories = df['Schizophrenia'].unique()

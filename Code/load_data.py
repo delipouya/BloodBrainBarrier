@@ -107,7 +107,7 @@ condition = (adata_BBB.obs[column_name] == 'Yes') | (adata_BBB.obs['disease'] ==
 adata_BBB_SZ_CR = adata_BBB[condition]
 print(adata_BBB_SZ_CR.obs['disease'].value_counts())
 ### save AnnData file using ad
-adata_BBB_SZ_CR.write("/home/delaram/BloodBrainBarrier/human_prefrontal_cortex_HBCC_Cohort_BBB_cell_types_Schizophrenia_extended.h5ad")
+adata_BBB_SZ_CR.write("/home/delaram/BloodBrainBarrier/Data/human_prefrontal_cortex_HBCC_Cohort_BBB_cell_types_Schizophrenia_extended2.h5ad")
 
 ####### disease distribution #######
 ### exclude normal ones
@@ -232,41 +232,76 @@ for column_name in sample_metadata.columns:
 ##### save subset data
 #adata_sub2.write("Data/human_prefrontal_cortex_HBCC_Cohort_BBB_cell_types_Schizophrenia_CaseControl.h5ad")
 ########################################################
+adata = ad.read_h5ad("/home/delaram/BloodBrainBarrier/Data/human_prefrontal_cortex_HBCC_Cohort_BBB_cell_types_Schizophrenia_extended.h5ad")
+##########################################
+### RUN ONLY IF THE DATA IS NOT NORMALIZED AND NOT PLANNING TO RUN HIDDEN WITH NORMALIZATION
+print(adata.X.shape)
+print(adata.X[:5])  # X is count not normalized
+sc.pp.filter_genes(adata, min_cells=3)
+sc.pp.normalize_total(adata, target_sum=1e4)
+sc.pp.log1p(adata)
+print(adata.obsm['X_pca'][:5])  # Print the first 5 rows of the PCA data
 
-### print the head of the data X
-print(adata_sub2.X.shape)
-print(adata_sub2.X[:5])  # X is count not normalized
-sc.pp.filter_genes(adata_sub2, min_cells=3)
-sc.pp.normalize_total(adata_sub2, target_sum=1e4)
-sc.pp.log1p(adata_sub2)
-sc.pp.highly_variable_genes(adata_sub2)#min_mean=0.0125, max_mean=3, min_disp=0.5
-sc.pp.pca(adata_sub2, n_comps=50, svd_solver='arpack')
-print(adata_sub2.obsm['X_pca'][:5])  # Print the first 5 rows of the PCA data
+#######################################
+adata_tmp = adata.copy()
+adata_tmp.layers["counts"] = adata_tmp.X.copy()   # keep raw counts
 
-sc.pp.neighbors(adata_sub2, n_neighbors=10, use_rep='X_pca')
-sc.tl.umap(adata_sub2)
-sc.pl.umap(adata_sub2, color=['cell_type'], frameon=False, size=20, title='Cell Type UMAP', wspace=0.4, hspace=0.4)
-sc.pl.umap(adata_sub2, color=['disease'], frameon=False, size=20, title='Disease UMAP', wspace=0.4, hspace=0.4)
-#sc.pl.umap(adata_sub2, color=['donor_id'], frameon=False, size=20, title='Donor ID UMAP', wspace=0.4, hspace=0.4)
+# Normalize IN PLACE (don’t use inplace=False here)
+sc.pp.normalize_total(adata_tmp, target_sum=1e4)
+sc.pp.log1p(adata_tmp)
 
+# Drop all-zero / near-absent genes to stabilize loess
+sc.pp.filter_genes(adata_tmp, min_cells=3)  # or min_counts=1 if very sparse
+
+# (Optional) ensure batches aren’t too small
+batch_sizes = adata_tmp.obs["donor_id"].value_counts()
+### histogram of batch sizes
+batch_num_thr = 100
+plt.figure(figsize=(8, 6))
+plt.hist(batch_sizes, bins=30, color='skyblue', edgecolor='black')
+plt.grid(axis='y', linestyle='--', alpha=0.7)
+plt.axvline(x=batch_num_thr, color='r', linestyle='--', label=f'Vertical Line at x={batch_num_thr}')
+plt.xlabel('Batch Size (Number of Cells per Donor)', fontsize=14)
+plt.ylabel('Frequency', fontsize=14)
+plt.legend()
+plt.show()
+keep = batch_sizes[batch_sizes >= batch_num_thr].index  # adjust threshold as needed
+adata_tmp = adata_tmp[adata_tmp.obs["donor_id"].isin(keep)].copy()
+
+# Now HVGs with batch correction
+sc.pp.highly_variable_genes(
+    adata_tmp,
+    n_top_genes=2000,
+    batch_key="donor_id",
+    flavor="seurat_v3",
+    check_values=True
+)
+
+# Downstream
+sc.tl.pca(adata_tmp, n_comps=50, use_highly_variable=True)
+sc.pp.neighbors(adata_tmp, n_neighbors=15, n_pcs=30)
+sc.tl.umap(adata_tmp)
+sc.pl.umap(adata_tmp, color=['cell_type'], frameon=False, size=20, title='Cell Type UMAP', wspace=0.4, hspace=0.4)
+sc.pl.umap(adata_tmp, color=['disease'], frameon=False, size=20, title='Disease UMAP', wspace=0.4, hspace=0.4)
+sc.pl.umap(adata_tmp, color=['donor_id'], frameon=False, size=20, title='Donor ID UMAP', wspace=0.4, hspace=0.4)
 
 columns_to_check = ['class', 'subclass','genetic_ancestry', 'assay', 'sex', 'disease', 'cell_type']
 for column_name in columns_to_check:
-    if column_name in adata_sub2.obs.columns:
-        sc.pl.umap(adata_sub2, color=[column_name], 
+    if column_name in adata_tmp.obs.columns:
+        sc.pl.umap(adata_tmp, color=[column_name], 
         frameon=False, size=20, title=f'{column_name} UMAP', wspace=0.4, hspace=0.4)
-print(adata_sub2.shape)
+print(adata_tmp.shape)
+adata_tmp.write("/home/delaram/BloodBrainBarrier/Data/human_prefrontal_cortex_HBCC_Cohort_BBB_cell_types_Schizophrenia_extended_normalized.h5ad")
 
 #### save subset2 preprocessed data
-adata_sub2.write("Data/human_prefrontal_cortex_HBCC_Cohort_BBB_cell_types_Schizophrenia_CaseControl_preprocessed.h5ad")
-
+#sub2.write("Data/human_prefrontal_cortex_HBCC_Cohort_BBB_cell_types_Schizophrenia_CaseControl_preprocessed.h5ad")
 
 columns_to_check = ['class', 'subclass','genetic_ancestry', 'assay', 'sex', 'disease', 'cell_type']
 for column_name in columns_to_check:
-    if column_name in adata.obs.columns:
-        sc.pl.umap(adata, color=[column_name], 
+    if column_name in adata_tmp.obs.columns:
+        sc.pl.umap(adata_tmp, color=[column_name], 
         frameon=False, size=20, title=f'{column_name} UMAP', wspace=0.4, hspace=0.4)
-print(adata.shape)
+print(adata_tmp.shape)
 
 
 adata = ad.read_h5ad("../Data/human_prefrontal_cortex_HBCC_Cohort_Schizophrenia_preprocessed.h5ad")
