@@ -10,16 +10,22 @@ import seaborn as sns
 import numpy as np
 from matplotlib_venn import venn2
 import pickle
+import math
 
 RANDOM_STATE = 42
 found.set_seed(RANDOM_STATE)  # set a fixed seed for replicability
 
 #adata = ad.read_h5ad("Data/human_prefrontal_cortex_HBCC_Cohort_BBB_cell_types_Schizophrenia_CaseControl_preprocessed.h5ad")
-#adata = ad.read_h5ad("/home/delaram/BloodBrainBarrier/Data/human_prefrontal_cortex_HBCC_Cohort_BBB_cell_types_Schizophrenia_extended.h5ad")
-adata = ad.read_h5ad("/home/delaram/BloodBrainBarrier/Data/human_prefrontal_cortex_HBCC_Cohort_BBB_cell_types_Schizophrenia_extended_normalized.h5ad")
+adata = ad.read_h5ad("/home/delaram/BloodBrainBarrier/Data/human_prefrontal_cortex_HBCC_Cohort_BBB_cell_types_Schizophrenia_extended.h5ad")
+adata_full_normed = ad.read_h5ad("/home/delaram/BloodBrainBarrier/Data/human_prefrontal_cortex_HBCC_Cohort_BBB_cell_types_Schizophrenia_extended_normalized.h5ad")
 
-algo = Pipeline.from_proc_ad("X_pca", m.log_reg, m.kmeans_bin) 
-#algo = Pipeline(m.run_lognorm_pca, m.log_reg, m.kmeans_bin, True)
+### add UMAP coordinates form adata_full_merged to adata
+###
+UMAP_coordinates = pd.DataFrame(adata_full_normed.obsm['X_umap'])
+UMAP_coordinates.index = adata_full_normed.obs.index
+###
+
+algo = Pipeline(m.run_lognorm_pca, m.log_reg, m.kmeans_bin, True)
 #algo = Pipeline.from_proc_ad("X_pca", m.log_reg, m.kmeans_bin) ## run this if already processed
 
 vis_k_choice = False  # set to True if you want to visualize the k choice
@@ -38,7 +44,7 @@ for cell_type in adata.obs.cell_type.unique():
         adata_cell_type,
         cond_col="Schizophrenia",
         control_val="No",
-        tuner=NaiveMinScoreTuner(score_phatdiff, [2, 5, 10, 15, 20, 25, 30]), #range(5, 31)
+        tuner=NaiveMinScoreTuner(score_phatdiff, [2, 5, 10, 20, 25, 30]), #range(5, 31)
         X=adata_cell_type.X,  
         adata=adata_cell_type,
         regopt_maxiter=300,
@@ -68,7 +74,16 @@ for cell_type in adata.obs.cell_type.unique():
     ### adding the optimal-K based results to the object
     adata_cell_type.obs['phat'] = res_dict[optimal_k][0]
     adata_cell_type.obs['labs'] = res_dict[optimal_k][1]
+    adata_cell_type.obs['opt_k'] = optimal_k
+
+    ### add phat and labs for various k as phat_{k value} and labs_{k_value}
+    for test_k in res_dict.keys():
+        adata_cell_type.obs[f'phat_{test_k}'] = res_dict[test_k][0]
+        adata_cell_type.obs[f'labs_{test_k}'] = res_dict[test_k][1]
+    
     adata_sub_dict[cell_type] = adata_cell_type
+    print(f"Processed {cell_type} with optimal K={optimal_k}")
+    print('-------------------------------------------------------')
 
 
 # Save the dictionary to a binary file
@@ -80,47 +95,46 @@ with open('/home/delaram/BloodBrainBarrier/Data/human_prefrontal_cortex_HBCC_Coh
     adata_sub_dict = pickle.load(f)
 
 
+for cell_type in adata_sub_dict.keys():
+    adata_cell_type = adata_sub_dict[cell_type]
+    print(cell_type, ' ', adata_cell_type.shape[0])
+
+
+inconsistent_relabel_dict = {}
 ######################################################################
-df = pd.DataFrame(adata.obs)
-for adata_cell_type in adata_sub_dict.values():
-    df_cell_type = pd.DataFrame(adata_cell_type.obs)
-    #### compare the p-hat for endothelial cells with the full dataset using scatter plot   
+### for each adata_cell_type, evaluate how many labs_2, labs_5, labs_10, labs_20, labs_25, labs_30 ('Yes', 'No') lists are consistent with each other given the exact order
+for cell_type in adata_sub_dict.keys():
+    adata_cell_type = adata_sub_dict[cell_type]
+    lab_columns = [f'labs_{k}' for k in [2, 5, 10, 20, 25, 30]] #
+    lab_values = pd.DataFrame(adata_cell_type.obs[lab_columns].values)
+    lab_values.columns = lab_columns
+    ### add a column to the dataframe based on whether values in each line are the same
+    K_vs_K30 = {}
+    for k in [2, 5, 10, 20, 25, 30]:
+        lab_values['notequal_{}_30'.format(k)] = lab_values['labs_{}'.format(k)] != lab_values['labs_30']
+        print(f"Cell type: {cell_type}, Not Equal labels (labs_{k}, labs_30): {lab_values['notequal_{}_30'.format(k)].sum()/ lab_values.shape[0] * 100:.2f}%")
+        K_vs_K30[f"(labs_{k}, labs_30)"] = round(lab_values['notequal_{}_30'.format(k)].sum()/ lab_values.shape[0] * 100, 3)
+    print('--------------------------')
+    inconsistent_relabel_dict[cell_type] = K_vs_K30
+
+for cell_type in inconsistent_relabel_dict.keys():
+    print(cell_type, ' ', inconsistent_relabel_dict[cell_type])
     plt.figure(figsize=(10, 6))
-    df_full = df[df['cell_type'] == cell_type]
-    plt.scatter(df_full['phat'], df_cell_type['phat'], alpha=0.5, color='blue',
-                edgecolor='k', s=50)
-    plt.title(f'Comparison of p-hat for {cell_type} vs Full Dataset')
-    plt.xlabel('p-hat (Full Dataset)')
-    plt.ylabel(f'p-hat ({cell_type})')
-    plt.grid(True, linestyle='--', alpha=0.7)
-    plt.xlim(0, 1)
-    plt.ylim(0, 1)
-    plt.plot([0, 1], [0, 1], color='red', linestyle='--', linewidth=1)
+    sns.barplot(x=list(inconsistent_relabel_dict[cell_type].keys()), y=list(inconsistent_relabel_dict[cell_type].values()))
+    plt.title(f'Inconsistent Labeling for {cell_type}', fontsize=20)
+    plt.xlabel('Label Comparison', fontsize=18)
+    plt.ylabel('Percentage (%)', fontsize=18)
+    plt.xticks(rotation=45, fontsize=16)
+    plt.yticks(fontsize=16)
+    plt.ylim(0, 100)
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
     plt.show()
 
-    ### compare labs from full dataset and cell type specific dataset
-    cell_type_labs = adata_cell_type.obs['labs'].tolist()
-    full_labs = df_full['labs'].tolist()
-
-    label_df = pd.DataFrame({
-        'cell_type_labs': cell_type_labs,
-        'full_labs': full_labs
-    })
-    label_df['shared'] = label_df['cell_type_labs'].isin(label_df['full_labs'])
-    label_df['unique_full'] = ~label_df['full_labs'].isin(label_df['cell_type_labs'])
-    label_df['unique_cell_type'] = ~label_df['cell_type_labs'].isin(label_df['full_labs'])
-    shared_count = label_df['shared'].sum()
-    unique_full_count = label_df['unique_full'].sum()
-    unique_cell_type_count = label_df['unique_cell_type'].sum()
-    print(f"Shared labels: {shared_count}, Unique to full dataset: {unique_full_count}, Unique to {cell_type}: {unique_cell_type_count}")
-
-
-
+######################################################################
 for adata_cell_type in adata_sub_dict.values():
     ### if a cell status was as control, keep as "control_0", 
     # if status was "disease" before, and updated label is 'Yes' (labs), label as "case"
     # if status was "disease" before, but updated label is 'No' (labs), label as "control_1"
-    
     obs = adata_cell_type.obs 
     obs['sub_label'] = np.select(
         [
@@ -131,13 +145,25 @@ for adata_cell_type in adata_sub_dict.values():
         ['control_0', 'case', 'control_1'],
         default='unknown'
     )
-
     # make it an ordered categorical for consistent plotting
     obs['sub_label'] = pd.Categorical(obs['sub_label'],
                                     categories=['control_0', 'control_1', 'case'],
                                     ordered=True)
     adata_cell_type.obs = obs
 
+for adata_cell_type in adata_sub_dict.values():
+    obs = adata_cell_type.obs 
+    for k in [2, 5, 10, 20, 25, 30]:
+        obs['sub_label_{}'.format(k)] = np.select(
+            [
+                obs['status'].eq('control'),
+                obs['status'].eq('disease') & obs['labs_{}'.format(k)].eq('Yes'),
+                obs['status'].eq('disease') & obs['labs_{}'.format(k)].eq('No'),
+            ],
+        ['control_0', 'case', 'control_1'],
+        default='unknown'
+    )
+    adata_cell_type.obs = obs
 ######################################################################
 ############### Cell type specific p-hat evaluation ###############
 ######################################################################
@@ -174,19 +200,105 @@ for i in range(len(keys)):
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.show()
 
+################# Donor based plotting
+
+for i in range(len(keys)):
+    print('cell type: ', keys[i])
+    df = adata_sub_dict[keys[i]].obs
+    df_normal = df[df['sub_label'] == 'control_0']
+    # donors per plot
+    batch_size = 50  # increase as you like
+    donors_all = sorted(df_normal['donor_id'].unique())
+    n_batches = math.ceil(len(donors_all) / batch_size)
+
+    for b in range(n_batches):
+        donor_batch = donors_all[b*batch_size:(b+1)*batch_size]
+        df_batch = df_normal[df_normal['donor_id'].isin(donor_batch)].copy()
+        # Make donor_id a categorical with ONLY this batch's donors
+        df_batch['donor_id'] = pd.Categorical(df_batch['donor_id'],
+                                            categories=donor_batch,
+                                            ordered=True)
+        # (sometimes pandas keeps hidden categories; drop any)
+        df_batch['donor_id'] = df_batch['donor_id'].cat.remove_unused_categories()
+        fig, ax = plt.subplots(figsize=(16, 8))
+        sns.violinplot(data=df_batch, x='donor_id', y='phat',
+                    order=donor_batch, cut=0, scale='width', ax=ax)
+
+        ax.set_title(f"{keys[i]} p-hat (after label correction) - batch {b+1}", fontsize=25)
+        ax.set_ylabel('p-hat', fontsize=24)
+        ax.set_xlabel('donor_id', fontsize=24)
+        ax.set_ylim(0, 1)
+        ### set fontsize of y ticks
+        ax.tick_params(axis='y', labelsize=23)
+        ax.set_xticklabels(donor_batch, rotation=45, ha='right', fontsize=17)
+        # y-grid only (prevents the forest of vertical lines)
+        ax.yaxis.grid(True, linestyle='--', alpha=0.6)
+        ax.xaxis.grid(False)
+
+        plt.tight_layout()
+        plt.show()
+    print('------------------------------')
+
+
+for i in range(len(keys)):
+    print('cell type: ', keys[i])
+    df = adata_sub_dict[keys[i]].obs
+    df_normal = df[df['sub_label'].isin(['control_1', 'case'])]
+    # donors per plot
+    batch_size = 30  # increase as you like
+    donors_all = sorted(df_normal['donor_id'].unique())
+    n_batches = math.ceil(len(donors_all) / batch_size)
+
+    for b in range(n_batches):
+        donor_batch = donors_all[b*batch_size:(b+1)*batch_size]
+        df_batch = df_normal[df_normal['donor_id'].isin(donor_batch)].copy()
+        # Make donor_id a categorical with ONLY this batch's donors
+        df_batch['donor_id'] = pd.Categorical(df_batch['donor_id'],
+                                            categories=donor_batch,
+                                            ordered=True)
+        # (sometimes pandas keeps hidden categories; drop any)
+        df_batch['donor_id'] = df_batch['donor_id'].cat.remove_unused_categories()
+        fig, ax = plt.subplots(figsize=(16, 8))
+        sns.violinplot(data=df_batch, x='donor_id', y='phat', hue='sub_label',
+                    order=donor_batch, cut=0, scale='width', ax=ax)
+
+        ax.set_title(f"{keys[i]} p-hat (after label correction) - batch {b+1}", fontsize=25)
+        ax.set_ylabel('p-hat', fontsize=24)
+        ax.set_xlabel('donor_id', fontsize=24)
+        ax.set_ylim(0, 1)
+        ### set fontsize of y ticks
+        ax.tick_params(axis='y', labelsize=23)
+        ax.set_xticklabels(donor_batch, rotation=45, ha='right', fontsize=17)
+        # y-grid only (prevents the forest of vertical lines)
+        ax.yaxis.grid(True, linestyle='--', alpha=0.6)
+        ax.xaxis.grid(False)
+
+        plt.tight_layout()
+        plt.show()
+    print('------------------------------')
+
 
 ###########################################################################
 ### add astrocyte metadata to the adata object 
-df = adata_sub_dict[keys[i]].obs
+for i in range(len(keys)):
+    df = adata_sub_dict[keys[i]].obs
+    adata_tmp = adata.copy()
+    df_full = adata_tmp.obs
+    ### merge df with the df_full based on barcodekey - put the rest of the column as NA
+    df_merged = df_full.merge(df[['phat', 'labs', 'sub_label']], left_index=True, right_index=True, how='left')
+    adata_tmp.obs['phat_celltype'] = df_merged['phat']
+    adata_tmp.obs['labs_celltype'] = df_merged['labs']
+    adata_tmp.obs['sub_label_celltype'] = df_merged['sub_label']
 
-adata_tmp = adata.copy()
-df_full = adata_tmp.obs
-### merge df with the df_full based on barcodekey - put the rest of the column as NA
-df_merged = df_full.merge(df[['phat', 'labs']], left_index=True, right_index=True, how='left')
-adata_tmp.obs['phat_celltype'] = df_merged['phat_y']
-adata_tmp.obs['labs_celltype'] = df_merged['labs_y']
-sc.pl.umap(adata_tmp, color=['phat_celltype'], frameon=False, size=20, title='P-hat UMAP', wspace=0.4, hspace=0.4)
-sc.pl.umap(adata_tmp, color=['labs_celltype'], frameon=False, size=20, title='Corrected Labels UMAP', wspace=0.4, hspace=0.4)
+    ### subset adata_tmp to only include cells in adata_full_normed
+    adata_tmp = adata_tmp[adata_tmp.obs.index.isin(adata_full_normed.obs.index), :]
+    adata_tmp.obsm['X_umap'] = UMAP_coordinates.loc[adata_tmp.obs.index].values
+    ### plot umap using X_umap_2
+    sc.pl.umap(adata_tmp, color=['phat_celltype'], frameon=False, size=20, 
+               title=f'{keys[i]} P-hat UMAP', wspace=0.4, hspace=0.4)
+    sc.pl.umap(adata_tmp, color=['sub_label_celltype'], frameon=False, 
+               size=20, title=f'{keys[i]} Corrected Labels UMAP', wspace=0.4, hspace=0.4)
+
 
 
 ####################################################################################################
