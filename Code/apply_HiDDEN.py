@@ -11,41 +11,52 @@ import numpy as np
 from matplotlib_venn import venn2
 import pickle
 import math
+from scipy.sparse import isspmatrix_csr, isspmatrix_csc
+from scipy.sparse import csr_array, csc_array
 
 RANDOM_STATE = 42
 found.set_seed(RANDOM_STATE)  # set a fixed seed for replicability
 
-#adata = ad.read_h5ad("Data/human_prefrontal_cortex_HBCC_Cohort_BBB_cell_types_Schizophrenia_CaseControl_preprocessed.h5ad")
-adata = ad.read_h5ad("/home/delaram/BloodBrainBarrier/Data/human_prefrontal_cortex_HBCC_Cohort_BBB_cell_types_Schizophrenia_extended.h5ad")
-adata_full_normed = ad.read_h5ad("/home/delaram/BloodBrainBarrier/Data/human_prefrontal_cortex_HBCC_Cohort_BBB_cell_types_Schizophrenia_extended_normalized.h5ad")
-
 ### add UMAP coordinates form adata_full_merged to adata
-###
+adata_full_normed = ad.read_h5ad("/home/delaram/BloodBrainBarrier/Data/human_prefrontal_cortex_HBCC_Cohort_BBB_cell_types_Schizophrenia_extended_normalized.h5ad")
 UMAP_coordinates = pd.DataFrame(adata_full_normed.obsm['X_umap'])
 UMAP_coordinates.index = adata_full_normed.obs.index
 ###
 
+#adata = ad.read_h5ad("Data/human_prefrontal_cortex_HBCC_Cohort_BBB_cell_types_Schizophrenia_CaseControl_preprocessed.h5ad")
+adata = ad.read_h5ad("/home/delaram/BloodBrainBarrier/Data/human_prefrontal_cortex_HBCC_Cohort_BBB_cell_types_Schizophrenia_extended.h5ad")
+
 algo = Pipeline(m.run_lognorm_pca, m.log_reg, m.kmeans_bin, True)
 #algo = Pipeline.from_proc_ad("X_pca", m.log_reg, m.kmeans_bin) ## run this if already processed
 
-vis_k_choice = False  # set to True if you want to visualize the k choice
+vis_k_choice = True  # set to True if you want to visualize the k choice
 adata_sub_dict = {}
+de_optimizer = True
+
 
 for cell_type in adata.obs.cell_type.unique():
     print(f"Cell type: {cell_type}")
-   
     #### subsetting data to include endothelial cells only
     adata_cell_type = adata[adata.obs.cell_type==cell_type,]
+    if de_optimizer:
+        X_in = adata_cell_type.X
+        if isspmatrix_csr(X_in):
+            X_in = csr_array(X_in)
+        elif isspmatrix_csc(X_in):
+            X_in = csc_array(X_in)
+            
     #p_hat, labs = found.find(adata_cell_type, cond_col="Schizophrenia", 
     #                         control_val="No", algo=algo, k=30,  
     #                         adata=adata_cell_type, regopt_maxiter=300, 
     #                         regopt_solver="newton-cg")
+   
     optimal_k, res_dict = found.findt(
         adata_cell_type,
         cond_col="Schizophrenia",
         control_val="No",
-        tuner=NaiveMinScoreTuner(score_phatdiff, [2, 5, 10, 20, 25, 30]), #range(5, 31)
-        X=adata_cell_type.X,  
+        #tuner=NaiveMinScoreTuner(score_phatdiff, [2, 5, 10, 20, 25, 30]), #range(5, 31)
+        tuner=NaiveMinScoreTuner(score_deg, k_range=[2, 5, 10, 20, 25, 30]),
+        X=X_in, #adata_cell_type.X,  
         adata=adata_cell_type,
         regopt_maxiter=300,
         regopt_solver="newton-cg"
@@ -87,33 +98,102 @@ for cell_type in adata.obs.cell_type.unique():
 
 
 # Save the dictionary to a binary file
-with open('/home/delaram/BloodBrainBarrier/Data/human_prefrontal_cortex_HBCC_Cohort_BBB_adata_sub_dict.pkl', 'wb') as f:
-    pickle.dump(adata_sub_dict, f)
+#with open('/home/delaram/BloodBrainBarrier/Data/human_prefrontal_cortex_HBCC_Cohort_BBB_adata_sub_dict.pkl', 'wb') as f:
+#    pickle.dump(adata_sub_dict, f)
 
 # Load the dictionary back from the file
 with open('/home/delaram/BloodBrainBarrier/Data/human_prefrontal_cortex_HBCC_Cohort_BBB_adata_sub_dict.pkl', 'rb') as f:
     adata_sub_dict = pickle.load(f)
 
-
 for cell_type in adata_sub_dict.keys():
     adata_cell_type = adata_sub_dict[cell_type]
     print(cell_type, ' ', adata_cell_type.shape[0])
 
+for adata_cell_type in adata_sub_dict.values():
+    ### if a cell status was as control, keep as "control_0", 
+    # if status was "disease" before, and updated label is 'Yes' (labs), label as "case"
+    # if status was "disease" before, but updated label is 'No' (labs), label as "control_1"
+    obs = adata_cell_type.obs 
+    obs['sub_label'] = np.select(
+        [
+            obs['status'].eq('control'),
+            obs['status'].eq('disease') & obs['labs'].eq('Yes'),
+            obs['status'].eq('disease') & obs['labs'].eq('No'),
+        ],
+        ['control_0', 'case', 'control_1'],
+        default='unknown'
+    )
+    adata_cell_type.obs = obs
 
 inconsistent_relabel_dict = {}
+
 ######################################################################
 ### for each adata_cell_type, evaluate how many labs_2, labs_5, labs_10, labs_20, labs_25, labs_30 ('Yes', 'No') lists are consistent with each other given the exact order
 for cell_type in adata_sub_dict.keys():
+
     adata_cell_type = adata_sub_dict[cell_type]
-    lab_columns = [f'labs_{k}' for k in [2, 5, 10, 20, 25, 30]] #
+    lab_columns = [f'labs_{k}' for k in [2, 5, 10, 20, 25, 30]]
+    lab_values = pd.DataFrame(adata_cell_type.obs[lab_columns].values)
+    lab_values.columns = lab_columns
+
+    ### add a column to the dataframe based on whether values in each line are the same
+    K_vs_K30 = {}
+    for k in [2, 5, 10, 20, 25, 30]:
+        lab_values['notequal_{}_30'.format(k)] = lab_values['labs_{}'.format(k)] != lab_values['labs_30']
+        adata_cell_type.obs[f'notequal_{k}_30'] = lab_values['notequal_{}_30'.format(k)].values
+
+        print(adata_cell_type.obs['status'][adata_cell_type.obs[f'notequal_{k}_30']].value_counts())
+        print(adata_cell_type.obs['sub_label'][adata_cell_type.obs[f'notequal_{k}_30']].value_counts())
+        print(f"Cell type: {cell_type}, Not Equal labels (labs_{k}, labs_30): {lab_values['notequal_{}_30'.format(k)].sum()/ lab_values.shape[0] * 100:.2f}%")
+        
+        K_vs_K30[f"(labs_{k}, labs_30)"] = round(lab_values['notequal_{}_30'.format(k)].sum()/ lab_values.shape[0] * 100, 3)
+    print('--------------------------')
+    inconsistent_relabel_dict[cell_type] = K_vs_K30
+
+### visualize the stats on inconsistency
+for cell_type in inconsistent_relabel_dict.keys():
+    print(cell_type, ' ', inconsistent_relabel_dict[cell_type])
+    plt.figure(figsize=(10, 6))
+    sns.barplot(x=list(inconsistent_relabel_dict[cell_type].keys()), y=list(inconsistent_relabel_dict[cell_type].values()))
+    plt.title(f'Inconsistent Labeling for {cell_type}', fontsize=20)
+    plt.xlabel('Label Comparison', fontsize=18)
+    plt.ylabel('Percentage (%)', fontsize=18)
+    plt.xticks(rotation=45, fontsize=16)
+    plt.yticks(fontsize=16)
+    plt.ylim(0, 100)
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
+    plt.show()
+
+######################################################################
+
+for adata_cell_type in adata_sub_dict.values():
+    obs = adata_cell_type.obs 
+    for k in [2, 5, 10, 20, 25, 30]:
+        obs['sub_label_{}'.format(k)] = np.select(
+            [
+                obs['status'].eq('control'),
+                obs['status'].eq('disease') & obs['labs_{}'.format(k)].eq('Yes'),
+                obs['status'].eq('disease') & obs['labs_{}'.format(k)].eq('No'),
+            ],
+        ['control_0', 'case', 'control_1'],
+        default='unknown'
+    )
+    adata_cell_type.obs = obs
+
+for cell_type in adata_sub_dict.keys():
+    adata_cell_type = adata_sub_dict[cell_type]
+    lab_columns = [f'sub_label_{k}' for k in [2, 5, 10, 20, 25, 30]] #
     lab_values = pd.DataFrame(adata_cell_type.obs[lab_columns].values)
     lab_values.columns = lab_columns
     ### add a column to the dataframe based on whether values in each line are the same
     K_vs_K30 = {}
     for k in [2, 5, 10, 20, 25, 30]:
-        lab_values['notequal_{}_30'.format(k)] = lab_values['labs_{}'.format(k)] != lab_values['labs_30']
-        print(f"Cell type: {cell_type}, Not Equal labels (labs_{k}, labs_30): {lab_values['notequal_{}_30'.format(k)].sum()/ lab_values.shape[0] * 100:.2f}%")
-        K_vs_K30[f"(labs_{k}, labs_30)"] = round(lab_values['notequal_{}_30'.format(k)].sum()/ lab_values.shape[0] * 100, 3)
+        lab_values['sub_label_notequal_{}_30'.format(k)] = lab_values['sub_label_{}'.format(k)] != lab_values['sub_label_30']
+        adata_cell_type.obs[f'sub_label_notequal_{k}_30'] = lab_values['sub_label_notequal_{}_30'.format(k)].values
+        sub_label_notequal_control_1 = adata_cell_type.obs[f'sub_label_notequal_{k}_30'] & (adata_cell_type.obs['sub_label_30'] == 'control_1')
+        print(f"Cell type: {cell_type}, Not Equal labels (labs_{k}, labs_30): {sum(sub_label_notequal_control_1)/ sum(lab_values['sub_label_30']=='control_1') * 100:.2f}%")
+        
+        K_vs_K30[f"(labs_{k}, labs_30)"] = round(sum(sub_label_notequal_control_1)/ sum(lab_values['sub_label_30']=='control_1') * 100, 3)
     print('--------------------------')
     inconsistent_relabel_dict[cell_type] = K_vs_K30
 
@@ -130,40 +210,16 @@ for cell_type in inconsistent_relabel_dict.keys():
     plt.grid(axis='y', linestyle='--', alpha=0.7)
     plt.show()
 
-######################################################################
-for adata_cell_type in adata_sub_dict.values():
-    ### if a cell status was as control, keep as "control_0", 
-    # if status was "disease" before, and updated label is 'Yes' (labs), label as "case"
-    # if status was "disease" before, but updated label is 'No' (labs), label as "control_1"
-    obs = adata_cell_type.obs 
-    obs['sub_label'] = np.select(
-        [
-            obs['status'].eq('control'),
-            obs['status'].eq('disease') & obs['labs'].eq('Yes'),
-            obs['status'].eq('disease') & obs['labs'].eq('No'),
-        ],
-        ['control_0', 'case', 'control_1'],
-        default='unknown'
-    )
-    # make it an ordered categorical for consistent plotting
-    obs['sub_label'] = pd.Categorical(obs['sub_label'],
-                                    categories=['control_0', 'control_1', 'case'],
-                                    ordered=True)
-    adata_cell_type.obs = obs
-
-for adata_cell_type in adata_sub_dict.values():
-    obs = adata_cell_type.obs 
+### the total number of relabeling in each K seems to the same within each cell type
+for cell_type in inconsistent_relabel_dict.keys():
+    adata_cell_type = adata_sub_dict[cell_type]
+    print(cell_type)
     for k in [2, 5, 10, 20, 25, 30]:
-        obs['sub_label_{}'.format(k)] = np.select(
-            [
-                obs['status'].eq('control'),
-                obs['status'].eq('disease') & obs['labs_{}'.format(k)].eq('Yes'),
-                obs['status'].eq('disease') & obs['labs_{}'.format(k)].eq('No'),
-            ],
-        ['control_0', 'case', 'control_1'],
-        default='unknown'
-    )
-    adata_cell_type.obs = obs
+        print(k, ' : ', sum(adata_cell_type.obs['sub_label_30']=='control_1'))
+    print('--------------------------')
+
+
+
 ######################################################################
 ############### Cell type specific p-hat evaluation ###############
 ######################################################################
