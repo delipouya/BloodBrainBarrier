@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import scanpy as sc
 import found
 from found.adapters import Pipeline
-from found.tune import NaiveMinScoreTuner, score_phatdiff, score_deg
+from found.tune import NaiveMinScoreTuner, score_phatdiff, score_deg, score_deg2
 from found import methods as m
 import seaborn as sns
 import numpy as np
@@ -17,11 +17,12 @@ from scipy.sparse import csr_array, csc_array
 RANDOM_STATE = 42
 found.set_seed(RANDOM_STATE)  # set a fixed seed for replicability
 
+##############################
 ### add UMAP coordinates form adata_full_merged to adata
 adata_full_normed = ad.read_h5ad("/home/delaram/BloodBrainBarrier/Data/human_prefrontal_cortex_HBCC_Cohort_BBB_cell_types_Schizophrenia_extended_normalized.h5ad")
 UMAP_coordinates = pd.DataFrame(adata_full_normed.obsm['X_umap'])
 UMAP_coordinates.index = adata_full_normed.obs.index
-###
+##############################
 
 #adata = ad.read_h5ad("Data/human_prefrontal_cortex_HBCC_Cohort_BBB_cell_types_Schizophrenia_CaseControl_preprocessed.h5ad")
 adata = ad.read_h5ad("/home/delaram/BloodBrainBarrier/Data/human_prefrontal_cortex_HBCC_Cohort_BBB_cell_types_Schizophrenia_extended.h5ad")
@@ -31,32 +32,33 @@ algo = Pipeline(m.run_lognorm_pca, m.log_reg, m.kmeans_bin, True)
 
 vis_k_choice = True  # set to True if you want to visualize the k choice
 adata_sub_dict = {}
-de_optimizer = True
+de_optimizer = False
 
-
+optimal_K_dict = {}
 for cell_type in adata.obs.cell_type.unique():
     print(f"Cell type: {cell_type}")
     #### subsetting data to include endothelial cells only
     adata_cell_type = adata[adata.obs.cell_type==cell_type,]
+    X_in = adata_cell_type.X
     if de_optimizer:
-        X_in = adata_cell_type.X
         if isspmatrix_csr(X_in):
             X_in = csr_array(X_in)
         elif isspmatrix_csc(X_in):
             X_in = csc_array(X_in)
-            
-    #p_hat, labs = found.find(adata_cell_type, cond_col="Schizophrenia", 
+
+    #p_hat, labs = found.HiDDENt(adata_cell_type, cond_col="Schizophrenia", 
     #                         control_val="No", algo=algo, k=30,  
     #                         adata=adata_cell_type, regopt_maxiter=300, 
     #                         regopt_solver="newton-cg")
    
-    optimal_k, res_dict = found.findt(
+    optimal_k, res_dict = found.HiDDENt(
         adata_cell_type,
         cond_col="Schizophrenia",
         control_val="No",
         #tuner=NaiveMinScoreTuner(score_phatdiff, [2, 5, 10, 20, 25, 30]), #range(5, 31)
-        tuner=NaiveMinScoreTuner(score_deg, k_range=[2, 5, 10, 20, 25, 30]),
+        tuner=NaiveMinScoreTuner(score_phatdiff, k_range=range(2, 31)),#[2, 5, 10, 20, 25, 30]
         X=X_in, #adata_cell_type.X,  
+        algo=algo,
         adata=adata_cell_type,
         regopt_maxiter=300,
         regopt_solver="newton-cg"
@@ -86,6 +88,7 @@ for cell_type in adata.obs.cell_type.unique():
     adata_cell_type.obs['phat'] = res_dict[optimal_k][0]
     adata_cell_type.obs['labs'] = res_dict[optimal_k][1]
     adata_cell_type.obs['opt_k'] = optimal_k
+    optimal_K_dict[cell_type] = optimal_k
 
     ### add phat and labs for various k as phat_{k value} and labs_{k_value}
     for test_k in res_dict.keys():
@@ -97,9 +100,10 @@ for cell_type in adata.obs.cell_type.unique():
     print('-------------------------------------------------------')
 
 
+
 # Save the dictionary to a binary file
-#with open('/home/delaram/BloodBrainBarrier/Data/human_prefrontal_cortex_HBCC_Cohort_BBB_adata_sub_dict.pkl', 'wb') as f:
-#    pickle.dump(adata_sub_dict, f)
+with open('/home/delaram/BloodBrainBarrier/Data/human_prefrontal_cortex_HBCC_Cohort_BBB_adata_sub_dict.pkl', 'wb') as f:
+    pickle.dump(adata_sub_dict, f)
 
 # Load the dictionary back from the file
 with open('/home/delaram/BloodBrainBarrier/Data/human_prefrontal_cortex_HBCC_Cohort_BBB_adata_sub_dict.pkl', 'rb') as f:
@@ -244,17 +248,37 @@ for i in range(len(keys)):
     plt.show()
 
 for i in range(len(keys)):
+    print(adata_sub_dict[keys[i]].shape[0])
+
+for i in range(len(keys)):
     print('cell type: ', keys[i])
     df = adata_sub_dict[keys[i]].obs
+    k_name = optimal_K_dict[keys[i]]
     plt.figure(figsize=(12, 10))
-    sns.violinplot(x='sub_label', y='phat', hue='sub_label', data=df, split=False) #palette='viridis',
-    plt.title(f'{keys[i]} p-hat (after label correction)', fontsize=32)
+    sns.violinplot(x='sub_label', y='phat', hue='sub_label', 
+                   data=df, split=False, cut=0) #palette='viridis',
+    plt.title(f'{keys[i]} p-hat (after label correction - opt K: {k_name})', fontsize=32)
     plt.ylabel('p-hat', fontsize=28)
     plt.xticks(rotation=45, ha='right', fontsize=28)
     plt.yticks(fontsize=28)
     plt.ylim(0, 1)
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.show()
+
+    '''
+    for k in [2, 5, 10, 20, 25, 30]:
+        print('K =', k)
+        plt.figure(figsize=(12, 10))
+        sns.violinplot(x='sub_label', y='phat_'+str(k), cut=0,
+                       hue='sub_label', data=df, split=False) #palette='viridis',
+        plt.title(f'{keys[i]} p-hat (after label correction) - K: {k}', fontsize=32)
+        plt.ylabel('p-hat', fontsize=28)
+        plt.xticks(rotation=45, ha='right', fontsize=28)
+        plt.yticks(fontsize=28)
+        plt.ylim(0, 1)
+        plt.grid(True, linestyle='--', alpha=0.7)
+        plt.show()
+    '''
 
 ################# Donor based plotting
 
