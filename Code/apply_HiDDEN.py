@@ -56,7 +56,7 @@ for cell_type in adata.obs.cell_type.unique():
         cond_col="Schizophrenia",
         control_val="No",
         #tuner=NaiveMinScoreTuner(score_phatdiff, [2, 5, 10, 20, 25, 30]), #range(5, 31)
-        tuner=NaiveMinScoreTuner(score_phatdiff, k_range=range(2, 31)),#[2, 5, 10, 20, 25, 30]
+        tuner=NaiveMinScoreTuner(score_phatdiff, k_range=[2, 5, 10, 20, 25, 30]),#[2, 5, 10, 20, 25, 30]
         X=X_in, #adata_cell_type.X,  
         algo=algo,
         adata=adata_cell_type,
@@ -124,7 +124,7 @@ for adata_cell_type in adata_sub_dict.values():
             obs['status'].eq('disease') & obs['labs'].eq('Yes'),
             obs['status'].eq('disease') & obs['labs'].eq('No'),
         ],
-        ['control_0', 'case', 'control_1'],
+        ['control', 'case_1', 'case_0'],
         default='unknown'
     )
     adata_cell_type.obs = obs
@@ -179,7 +179,7 @@ for adata_cell_type in adata_sub_dict.values():
                 obs['status'].eq('disease') & obs['labs_{}'.format(k)].eq('Yes'),
                 obs['status'].eq('disease') & obs['labs_{}'.format(k)].eq('No'),
             ],
-        ['control_0', 'case', 'control_1'],
+        ['control', 'case_1', 'case_0'],
         default='unknown'
     )
     adata_cell_type.obs = obs
@@ -191,7 +191,7 @@ for cell_type in adata_sub_dict.keys():
     lab_values.columns = lab_columns
     ### add a column to the dataframe based on whether values in each line are the same
     K_vs_K30 = {}
-    for k in [2, 5, 10, 20, 25, 30]:
+    for k in range(2, 31):
         lab_values['sub_label_notequal_{}_30'.format(k)] = lab_values['sub_label_{}'.format(k)] != lab_values['sub_label_30']
         adata_cell_type.obs[f'sub_label_notequal_{k}_30'] = lab_values['sub_label_notequal_{}_30'.format(k)].values
         sub_label_notequal_control_1 = adata_cell_type.obs[f'sub_label_notequal_{k}_30'] & (adata_cell_type.obs['sub_label_30'] == 'control_1')
@@ -237,7 +237,8 @@ for i in range(len(keys)):
 
     ###### Violin plot for p-hat by Schizophrenia status ######
     plt.figure(figsize=(16, 12))
-    sns.violinplot(x='Schizophrenia', y='phat', hue='Schizophrenia', data=df, split=False) #palette='viridis',
+    sns.violinplot(x='Schizophrenia', y='phat', hue='Schizophrenia', data=df, 
+                   split=False, cut=0) #palette='viridis',
     plt.title(f'{keys[i]} p-hat (Before label correction)', fontsize=32)
     plt.xlabel('Schizophrenia Status', fontsize=28)
     plt.ylabel('p-hat', fontsize=28)
@@ -248,16 +249,16 @@ for i in range(len(keys)):
     plt.show()
 
 for i in range(len(keys)):
-    print(adata_sub_dict[keys[i]].shape[0])
+    print(adata_sub_dict[keys[i]].shape[0], ' cells in ', keys[i])
+
 
 for i in range(len(keys)):
     print('cell type: ', keys[i])
     df = adata_sub_dict[keys[i]].obs
-    k_name = optimal_K_dict[keys[i]]
     plt.figure(figsize=(12, 10))
     sns.violinplot(x='sub_label', y='phat', hue='sub_label', 
                    data=df, split=False, cut=0) #palette='viridis',
-    plt.title(f'{keys[i]} p-hat (after label correction - opt K: {k_name})', fontsize=32)
+    plt.title(f'{keys[i]} p-hat (after label correction - opt K)', fontsize=32)
     plt.ylabel('p-hat', fontsize=28)
     plt.xticks(rotation=45, ha='right', fontsize=28)
     plt.yticks(fontsize=28)
@@ -265,20 +266,41 @@ for i in range(len(keys)):
     plt.grid(True, linestyle='--', alpha=0.7)
     plt.show()
 
-    '''
+
+palette = {
+    'control':  '#ADD8E6',  # lightblue
+    'case_0':   '#90EE90',  # lightgreen
+    'case_1':   '#F08080',  # lightcoral
+}
+
+for i in range(len(keys)):
+
+    df = adata_sub_dict[keys[i]].obs
+    desired_order = ['control', 'case_0', 'case_1']
+
+    
+
     for k in [2, 5, 10, 20, 25, 30]:
         print('K =', k)
+        xcol = f'sub_label_{k}'
+        ycol = f'phat_{k}'
+
+        # enforce consistent order (even if some levels are missing in this k)
+        df[xcol] = pd.Categorical(df[xcol], categories=desired_order, ordered=True)
         plt.figure(figsize=(12, 10))
-        sns.violinplot(x='sub_label', y='phat_'+str(k), cut=0,
-                       hue='sub_label', data=df, split=False) #palette='viridis',
-        plt.title(f'{keys[i]} p-hat (after label correction) - K: {k}', fontsize=32)
+        sns.violinplot(x=xcol, y=ycol, cut=0,
+                       hue=xcol, data=df, split=False,
+                       palette=palette,       #
+                       order=desired_order) #palette='viridis',
+        plt.title(f'{keys[i]} p-hat(after label correction) - K: {k}', fontsize=32)
         plt.ylabel('p-hat', fontsize=28)
         plt.xticks(rotation=45, ha='right', fontsize=28)
         plt.yticks(fontsize=28)
         plt.ylim(0, 1)
         plt.grid(True, linestyle='--', alpha=0.7)
         plt.show()
-    '''
+
+
 
 ################# Donor based plotting
 
